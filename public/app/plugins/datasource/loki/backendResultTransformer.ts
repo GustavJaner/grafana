@@ -1,8 +1,8 @@
-import { DataQueryRequest, DataQueryResponse, DataFrame, isDataFrame, FieldType, QueryResultMeta } from '@grafana/data';
+import { DataQueryResponse, DataFrame, isDataFrame, FieldType, QueryResultMeta, ArrayVector } from '@grafana/data';
 import { LokiQuery, LokiQueryType } from './types';
 import { makeTableFrames } from './makeTableFrames';
 import { formatQuery, getHighlighterExpressionsFromQuery } from './query_utils';
-import { makeIdField } from './makeIdField';
+import { parseLabelsFromField } from 'app/features/live/data/StreamingDataFrame';
 
 function isMetricFrame(frame: DataFrame): boolean {
   return frame.fields.every((field) => field.type === FieldType.time || field.type === FieldType.number);
@@ -29,20 +29,35 @@ function processStreamFrame(frame: DataFrame, query: LokiQuery | undefined): Dat
     },
   };
   const newFrame = setFrameMeta(frame, meta);
-  const newFields = frame.fields.map((field) => {
-    // the nanosecond-timestamp field must have a type-time
-    if (field.name === 'tsNs') {
-      return {
-        ...field,
-        type: FieldType.time,
-      };
-    } else {
-      return field;
+
+  const newFields = newFrame.fields.map((field) => {
+    switch (field.name) {
+      case 'labels': {
+        // this can be either a FieldType.string, which we have to decode,
+        // or a FieldType.other, which is already decoded.
+        return field.type === FieldType.string
+          ? {
+              name: field.name,
+              type: FieldType.other,
+              config: field.config,
+              // we are parsing the labels the same way as streaming-dataframes do
+              values: new ArrayVector(field.values.toArray().map((text) => parseLabelsFromField(text))),
+            }
+          : field;
+      }
+      case 'tsNs': {
+        // we need to switch the field-type to be `time`
+        return {
+          ...field,
+          type: FieldType.time,
+        };
+      }
+      default: {
+        // no modification needed
+        return field;
+      }
     }
   });
-
-  // we add a calculated id-field
-  newFields.push(makeIdField(frame));
 
   return {
     ...newFrame,
@@ -96,10 +111,7 @@ function groupFrames(
   return { streamsFrames, metricInstantFrames, metricRangeFrames };
 }
 
-export function transformBackendResult(
-  response: DataQueryResponse,
-  request: DataQueryRequest<LokiQuery>
-): DataQueryResponse {
+export function transformBackendResult(response: DataQueryResponse, queries: LokiQuery[]): DataQueryResponse {
   const { data, ...rest } = response;
 
   // in the typescript type, data is an array of basically anything.
@@ -112,7 +124,7 @@ export function transformBackendResult(
     return d;
   });
 
-  const queryMap = new Map(request.targets.map((query) => [query.refId, query]));
+  const queryMap = new Map(queries.map((query) => [query.refId, query]));
 
   const { streamsFrames, metricInstantFrames, metricRangeFrames } = groupFrames(dataFrames, queryMap);
 

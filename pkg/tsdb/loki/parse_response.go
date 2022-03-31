@@ -17,7 +17,10 @@ func parseResponse(value *loghttp.QueryResponse, query *lokiQuery) (data.Frames,
 	}
 
 	for _, frame := range frames {
-		adjustFrame(frame, query)
+		err = adjustFrame(frame, query)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return frames, nil
@@ -54,8 +57,8 @@ func lokiMatrixToDataFrames(matrix loghttp.Matrix, query *lokiQuery, stats []dat
 			values = append(values, float64(k.Value))
 		}
 
-		timeField := data.NewField("", nil, timeVector)
-		valueField := data.NewField("", tags, values)
+		timeField := data.NewField("time", nil, timeVector)
+		valueField := data.NewField("value", tags, values)
 
 		frame := data.NewFrame("", timeField, valueField)
 		frame.SetMeta(&data.FrameMeta{
@@ -79,8 +82,8 @@ func lokiVectorToDataFrames(vector loghttp.Vector, query *lokiQuery, stats []dat
 		for k, v := range v.Metric {
 			tags[string(k)] = string(v)
 		}
-		timeField := data.NewField("", nil, timeVector)
-		valueField := data.NewField("", tags, values)
+		timeField := data.NewField("time", nil, timeVector)
+		valueField := data.NewField("value", tags, values)
 
 		frame := data.NewFrame("", timeField, valueField)
 		frame.SetMeta(&data.FrameMeta{
@@ -94,34 +97,30 @@ func lokiVectorToDataFrames(vector loghttp.Vector, query *lokiQuery, stats []dat
 }
 
 func lokiStreamsToDataFrames(streams loghttp.Streams, query *lokiQuery, stats []data.QueryStat) data.Frames {
-	frames := data.Frames{}
+	var timeVector []time.Time
+	var values []string
+	var labelsVector []string
 
 	for _, v := range streams {
-		tags := make(map[string]string, len(v.Labels))
-		timeVector := make([]time.Time, 0, len(v.Entries))
-		values := make([]string, 0, len(v.Entries))
-
-		for k, v := range v.Labels {
-			tags[k] = v
-		}
+		labelsText := data.Labels(v.Labels.Map()).String()
 
 		for _, k := range v.Entries {
 			timeVector = append(timeVector, k.Timestamp.UTC())
 			values = append(values, k.Line)
+			labelsVector = append(labelsVector, labelsText)
 		}
-
-		timeField := data.NewField("", nil, timeVector)
-		valueField := data.NewField("", tags, values)
-
-		frame := data.NewFrame("", timeField, valueField)
-		frame.SetMeta(&data.FrameMeta{
-			Stats: stats,
-		})
-
-		frames = append(frames, frame)
 	}
 
-	return frames
+	timeField := data.NewField("ts", nil, timeVector)
+	valueField := data.NewField("line", nil, values)
+	labelsField := data.NewField("labels", nil, labelsVector)
+
+	frame := data.NewFrame("", labelsField, timeField, valueField)
+	frame.SetMeta(&data.FrameMeta{
+		Stats: stats,
+	})
+
+	return data.Frames{frame}
 }
 
 func parseStats(result stats.Result) []data.QueryStat {
