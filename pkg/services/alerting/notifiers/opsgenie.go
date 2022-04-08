@@ -49,11 +49,18 @@ func init() {
 				Element:      alerting.ElementTypeCheckbox,
 				Description:  "Automatically close alerts in OpsGenie once the alert goes back to ok.",
 				PropertyName: "autoClose",
-			}, {
+			},
+			{
 				Label:        "Override priority",
 				Element:      alerting.ElementTypeCheckbox,
 				Description:  "Allow the alert priority to be set using the og_priority tag",
 				PropertyName: "overridePriority",
+			},
+			{
+				Label:        "Override responder",
+				Element:      alerting.ElementTypeCheckbox,
+				Description:  "Allow the alert responders to be set using the og_responders tag",
+				PropertyName: "overrideResponders",
 			},
 			{
 				Label:   "Send notification tags as",
@@ -87,6 +94,7 @@ const (
 func NewOpsGenieNotifier(model *models.AlertNotification, fn alerting.GetDecryptedValueFn, ns notifications.Service) (alerting.Notifier, error) {
 	autoClose := model.Settings.Get("autoClose").MustBool(true)
 	overridePriority := model.Settings.Get("overridePriority").MustBool(true)
+	overrideResponders := model.Settings.Get("overrideResponders").MustBool(true)
 	apiKey := fn(context.Background(), model.SecureSettings, "apiKey", model.Settings.Get("apiKey").MustString(), setting.SecretKey)
 	apiURL := model.Settings.Get("apiUrl").MustString()
 	if apiKey == "" {
@@ -104,13 +112,14 @@ func NewOpsGenieNotifier(model *models.AlertNotification, fn alerting.GetDecrypt
 	}
 
 	return &OpsGenieNotifier{
-		NotifierBase:     NewNotifierBase(model, ns),
-		APIKey:           apiKey,
-		APIUrl:           apiURL,
-		AutoClose:        autoClose,
-		OverridePriority: overridePriority,
-		SendTagsAs:       sendTagsAs,
-		log:              log.New("alerting.notifier.opsgenie"),
+		NotifierBase:       NewNotifierBase(model, ns),
+		APIKey:             apiKey,
+		APIUrl:             apiURL,
+		AutoClose:          autoClose,
+		OverridePriority:   overridePriority,
+		overrideResponders: overrideResponders,
+		SendTagsAs:         sendTagsAs,
+		log:                log.New("alerting.notifier.opsgenie"),
 	}, nil
 }
 
@@ -118,12 +127,13 @@ func NewOpsGenieNotifier(model *models.AlertNotification, fn alerting.GetDecrypt
 // alert notifications to OpsGenie
 type OpsGenieNotifier struct {
 	NotifierBase
-	APIKey           string
-	APIUrl           string
-	AutoClose        bool
-	OverridePriority bool
-	SendTagsAs       string
-	log              log.Logger
+	APIKey             string
+	APIUrl             string
+	AutoClose          bool
+	OverridePriority   bool
+	overrideResponders bool
+	SendTagsAs         string
+	log                log.Logger
 }
 
 // Notify sends an alert notification to OpsGenie.
@@ -187,6 +197,11 @@ func (on *OpsGenieNotifier) createAlert(evalContext *alerting.EvalContext) error
 				if validPriorities[tag.Value] {
 					bodyJSON.Set("priority", tag.Value)
 				}
+			}
+		}
+		if tag.Key == "og_responders" {
+			if on.overrideResponders {
+				bodyJSON.Set("responders", tag.Value)
 			}
 		}
 	}
